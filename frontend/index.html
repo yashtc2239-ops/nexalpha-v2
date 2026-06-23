@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NEXALPHA — NSE Stock Intelligence</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --border:#30363d; --text:#e6edf3; --muted:#8b949e;
+          --green:#3fb950; --red:#f85149; --blue:#58a6ff; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:20px 32px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+  h1 { font-size:18px; margin:0; letter-spacing:.5px; }
+  .container { max-width:1100px; margin:0 auto; padding:24px 32px; }
+  .controls { display:flex; gap:12px; margin-bottom:24px; flex-wrap:wrap; }
+  input, select, button { background:var(--card); border:1px solid var(--border); color:var(--text);
+    padding:10px 14px; border-radius:6px; font-size:14px; }
+  button { background:var(--blue); color:#fff; border:none; cursor:pointer; font-weight:600; }
+  button:hover { opacity:.85; }
+  .grid { display:grid; grid-template-columns: 2fr 1fr; gap:20px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:20px; margin-bottom:20px; }
+  .card h3 { margin-top:0; font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+  .price { font-size:32px; font-weight:700; }
+  .signal { display:inline-block; padding:4px 12px; border-radius:20px; font-weight:600; font-size:13px; }
+  .signal.buy { background:rgba(63,185,80,.15); color:var(--green); }
+  .signal.sell { background:rgba(248,81,73,.15); color:var(--red); }
+  .signal.hold { background:rgba(139,148,158,.15); color:var(--muted); }
+  ul.reasons { padding-left:18px; margin:8px 0; }
+  ul.reasons li { margin-bottom:6px; font-size:13px; color:var(--muted); }
+  .error { color:var(--red); font-size:13px; }
+  table { width:100%; font-size:13px; border-collapse:collapse; }
+  th, td { text-align:left; padding:6px 4px; border-bottom:1px solid var(--border); }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚡ NEXALPHA — NSE Stock Intelligence Dashboard</h1>
+  <span style="color:var(--muted); font-size:12px;">v2.0 production</span>
+</header>
+<div class="container">
+  <div class="controls">
+    <input id="ticker" placeholder="e.g. RELIANCE.NS" value="RELIANCE.NS">
+    <input id="horizon" type="number" value="7" style="width:80px;" title="Horizon (days)">
+    <button onclick="runAnalysis()">Analyze</button>
+    <button onclick="runBacktest()">Backtest</button>
+  </div>
+
+  <div id="errorBox" class="error"></div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h3>Price & Signal</h3>
+        <div id="priceBlock"><span class="price">—</span></div>
+      </div>
+      <div class="card">
+        <h3>Equity Curve (Backtest, out-of-sample)</h3>
+        <canvas id="equityChart" height="220"></canvas>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <h3>Indicator Reasons</h3>
+        <ul class="reasons" id="reasonsList"><li>Run analysis to populate</li></ul>
+      </div>
+      <div class="card">
+        <h3>SHAP Top Features</h3>
+        <table id="shapTable"><tbody><tr><td colspan="2">—</td></tr></tbody></table>
+      </div>
+      <div class="card">
+        <h3>Backtest Stats</h3>
+        <table id="statsTable"><tbody><tr><td>Total Return</td><td id="statReturn">—</td></tr>
+        <tr><td>Sharpe Ratio</td><td id="statSharpe">—</td></tr>
+        <tr><td>Trades</td><td id="statTrades">—</td></tr></tbody></table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = "http://localhost:5000";
+let chart;
+
+function showError(msg) { document.getElementById("errorBox").textContent = msg || ""; }
+
+async function runAnalysis() {
+  showError("");
+  const ticker = document.getElementById("ticker").value.trim();
+  const horizon = parseInt(document.getElementById("horizon").value) || 7;
+  try {
+    const res = await fetch(`${API_BASE}/api/analyze`, {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ ticker, horizon_days: horizon })
+    });
+    const data = await res.json();
+    if (data.error) { showError(data.error); return; }
+
+    const sig = data.prediction.signal;
+    const sigClass = sig === 1 ? "buy" : sig === -1 ? "sell" : "hold";
+    const sigLabel = sig === 1 ? "BUY" : sig === -1 ? "SELL" : "HOLD";
+
+    document.getElementById("priceBlock").innerHTML = `
+      <span class="price">₹${data.current_price.toFixed(2)}</span>
+      <span class="signal ${sigClass}">${sigLabel} (${(data.prediction.signal_prob*100).toFixed(1)}%)</span>
+      <p style="color:var(--muted); font-size:13px;">Predicted ${horizon}-day return:
+      ${data.prediction.predicted_return_pct.toFixed(2)}% → ₹${data.prediction.predicted_price.toFixed(2)}</p>
+      <p style="color:var(--muted); font-size:12px; border-top:1px solid var(--border); padding-top:8px; margin-top:8px;">
+      Model test accuracy: <b>${(data.prediction.model_metrics.clf_accuracy*100).toFixed(1)}%</b> &nbsp;|&nbsp;
+      F1: <b>${data.prediction.model_metrics.clf_f1.toFixed(3)}</b> &nbsp;|&nbsp;
+      Reg MSE: <b>${data.prediction.model_metrics.reg_mse.toFixed(6)}</b>
+      </p>
+    `;
+
+    document.getElementById("reasonsList").innerHTML =
+      data.indicator_reasons.map(r => `<li>${r}</li>`).join("") || "<li>No strong signals</li>";
+
+    const shapRows = (data.shap_explanation.top_features || [])
+      .map(f => `<tr><td>${f.feature}</td><td>${f.mean_abs_shap}</td></tr>`).join("");
+    document.getElementById("shapTable").querySelector("tbody").innerHTML = shapRows || "<tr><td colspan=2>n/a</td></tr>";
+  } catch (e) {
+    showError("Request failed: " + e.message);
+  }
+}
+
+async function runBacktest() {
+  showError("");
+  const ticker = document.getElementById("ticker").value.trim();
+  const horizon = parseInt(document.getElementById("horizon").value) || 7;
+  try {
+    const res = await fetch(`${API_BASE}/api/backtest`, {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ ticker, horizon_days: horizon })
+    });
+    const data = await res.json();
+    if (data.error) { showError(data.error); return; }
+
+    document.getElementById("statReturn").textContent = (data.total_return*100).toFixed(2) + "%";
+    document.getElementById("statSharpe").textContent = data.sharpe_ratio;
+    document.getElementById("statTrades").textContent = data.n_trades;
+
+    const labels = data.equity_curve.map(p => p.date);
+    const values = data.equity_curve.map(p => p.equity);
+    if (chart) chart.destroy();
+    chart = new Chart(document.getElementById("equityChart"), {
+      type: "line",
+      data: { labels, datasets: [{ label: "Equity", data: values, borderColor: "#58a6ff", tension: 0.2, pointRadius: 0 }] },
+      options: { scales: { x: { display: false }, y: { ticks: { color: "#8b949e" } } }, plugins: { legend: { display: false } } }
+    });
+  } catch (e) {
+    showError("Request failed: " + e.message);
+  }
+}
+</script>
+</body>
+</html>

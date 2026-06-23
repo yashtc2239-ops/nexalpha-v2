@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pkl
+*.db
+models_store/
+.env
+.pytest_cache/
+mlruns/
+*.egg-info/
+.DS_Store
+node_modules/

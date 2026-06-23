@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      - name: Lint (flake8)
+        run: |
+          pip install flake8
+          flake8 app --max-line-length=110 --extend-ignore=E203
+      - name: Run tests
+        run: |
+          PYTHONPATH=. pytest tests/ -v
+
+  docker-build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t nexalpha-backend:ci ./backend
+
+  security-scan:
+    needs: docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image for scan
+        run: docker build -t nexalpha-backend:scan ./backend
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "nexalpha-backend:scan"
+          severity: "CRITICAL,HIGH"
+          exit-code: "0"

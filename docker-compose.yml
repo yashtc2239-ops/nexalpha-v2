@@ -1,0 +1,35 @@
+version: "3.9"
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "5000:5000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - MODEL_DIR=/app/models_store
+    volumes:
+      - models_store:/app/models_store
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.13.2
+    command: mlflow server --host 0.0.0.0 --port 5001 --backend-store-uri /mlruns
+    ports:
+      - "5001:5001"
+    volumes:
+      - mlflow_data:/mlruns
+
+volumes:
+  models_store:
+  redis_data:
+  mlflow_data:
