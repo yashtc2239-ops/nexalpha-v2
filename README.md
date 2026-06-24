@@ -91,36 +91,8 @@ python run.py
 ## Measured performance (real, not illustrative)
 
 Evaluated across the same 4 tickers the v1 paper used (`RELIANCE.NS`, `TCS.NS`, `INFY.NS`,
-`HDFCBANK.NS`), at horizons of 5/7/10 days, using `scripts/evaluate_multiple_tickers.py`:
-
-| Metric | Value |
-|---|---|
-| Mean classification accuracy (12 runs) | **56.4%** (std dev 6.3%) |
-| Mean F1 score | **0.362** |
-| Accuracy range | 48.3% – 72.4% |
-
-**This does not match the v1 paper's reported 72-76% test accuracy / 0.78 AUC.** See
-"What changed from v1" above and [`PUBLICATIONS.md`](./PUBLICATIONS.md) for why.
-
-A more specific pattern emerged: **`RELIANCE.NS` and `INFY.NS` show a consistent, real
-directional signal (F1 0.57-0.71 across all horizons)**, while **`TCS.NS` and `HDFCBANK.NS`
-degenerate into a trivial always-predict-majority-class model at 7+ day horizons (F1=0.000)**
-even after adding `class_weight="balanced"` to address class imbalance. This is treated as
-a genuine finding, not a bug to silently fix: large, lower-volatility blue-chip stocks
-appear to carry less learnable short-term directional signal in this feature set than
-more volatile/momentum-driven names. Full per-ticker results: `scripts/evaluation_results.csv`.
-
-## Known limitations (honest, not hidden)
-
-- RandomForest only — no LSTM/XGBoost ensemble yet (listed as roadmap, not claimed as shipped).
-- No real-time tick data — daily granularity (yfinance EOD).
-- Single-asset models — no cross-sectional/portfolio-level signal yet.
-- Backtest ignores Indian market-specific costs like STT and exchange transaction charges beyond a flat commission.
-
-## Measured accuracy (real data, not a claim)
-
-Ran `backend/scripts/evaluate_multiple_tickers.py` across the same 4 tickers cited in the
-related paper, at 3 horizons each (12 runs total, June 2026):
+`HDFCBANK.NS`), at horizons of 5/7/10 days, using `scripts/evaluate_multiple_tickers.py`
+(12 runs total, June 2026):
 
 | Ticker | h=5d | h=7d | h=10d |
 |---|---|---|---|
@@ -129,26 +101,66 @@ related paper, at 3 horizons each (12 runs total, June 2026):
 | INFY.NS | acc 52.5%, F1 0.600 | acc 54.2%, F1 0.609 | acc 53.5%, F1 0.667 |
 | HDFCBANK.NS | acc 59.3%, F1 0.143 | acc 50.9%, **F1 0.000** | acc 62.1%, **F1 0.000** |
 
-**Mean accuracy: 56.4% (σ=6.3%)** — well below the 72-76% reported in the related v1
-paper (see `PUBLICATIONS.md`), consistent with a leakage-corrected, genuinely
-out-of-sample evaluation.
+**Mean accuracy: 56.4% (σ=6.3%), mean F1: 0.362, range 48.3%-72.4%.** This does not match
+the v1 paper's reported 72-76% test accuracy / 0.78 AUC — see "What changed from v1" above
+and [`PUBLICATIONS.md`](./PUBLICATIONS.md) for why.
 
-**Residual issue found, not fully fixed**: `class_weight="balanced"` was added to the
-classifier after discovering degenerate (always-majority-class) predictions during this
-same testing. It fixed the issue for RELIANCE.NS and INFY.NS at every horizon, but
-**TCS.NS and HDFCBANK.NS still collapse to F1=0.000 at the 7-day and 10-day horizons** —
-the "high" 72.4% accuracy for TCS@10d is from a model that never predicts "up" at all,
-not a genuinely skilled one. This is left as a documented, known limitation rather than
-papered over: a real fix would need per-ticker threshold tuning or a precision-recall-based
-decision boundary (the original paper's own PR-curve analysis is the right direction here),
-not just a global class-weight adjustment.
+A more specific pattern emerged: **`RELIANCE.NS` and `INFY.NS` show a consistent, real
+directional signal (F1 0.57-0.71 across all horizons)**, while **`TCS.NS` and `HDFCBANK.NS`
+degenerate into a trivial always-predict-majority-class model at 7+ day horizons (F1=0.000)**
+even after adding `class_weight="balanced"` to address class imbalance. This is treated as
+a genuine finding, not a bug to silently fix: large, lower-volatility blue-chip stocks
+appear to carry less learnable short-term directional signal in this feature set than
+more volatile/momentum-driven names.
+
+**Residual issue found, not fully fixed**: `class_weight="balanced"` fixed the degenerate-
+classifier problem for `RELIANCE.NS`/`INFY.NS` at every horizon, but not for `TCS.NS`/
+`HDFCBANK.NS` at 7+ day horizons — the "high" 72.4% accuracy for TCS@10d is from a model
+that never predicts "up" at all, not a genuinely skilled one. A real fix would need
+per-ticker threshold tuning or a precision-recall-based decision boundary (the original
+paper's own PR-curve analysis is the right direction here), not just a global class-weight
+adjustment.
 
 **Also worth noting**: all 12 runs use a single chronological train/test split (most recent
 ~20% of days). A short, single test window can land entirely within one trend regime —
 e.g. TCS@10d's test slice may have had almost no "up" days at all, which alone explains an
 F1 of exactly 0 independent of the class-weight fix. A more rigorous evaluation would use
 walk-forward validation (multiple rolling time windows) rather than one fixed split — listed
-here as a known evaluation-methodology limitation, not silently worked around.
+here as a known evaluation-methodology limitation, not silently worked around. Full
+per-ticker results: `scripts/evaluation_results.csv`.
+
+## Real-world impact
+
+Stock-direction prediction is a genuinely hard, near-efficient-market problem — this
+project's own numbers (56.4% mean accuracy) confirm that, and no claim here suggests this
+system is ready to trade real capital. The actual impact of this project is in two other,
+more defensible places:
+
+1. **Catching an overconfident, leakage-driven model before it could be trusted.** The v1
+   pipeline reported 72-76% accuracy and 12-18% backtest outperformance — numbers that
+   plausibly looks "good enough to deploy." If those numbers had been used to justify
+   real-money trading decisions, the data-leakage bug behind them would have caused real
+   financial loss. Finding and fixing that bug *before* deployment is the actual outcome of
+   this project, not the prediction itself — this is the same class of problem that costs
+   real fintech and quant teams real money when leakage or evaluation bugs ship to
+   production undetected.
+2. **The engineering pattern, not the ticker.** The leakage prevention (`select_features()`
+   as a single source of truth), drift monitoring (PSI on stationary features only), and
+   honest evaluation methodology (walk-forward awareness, class-imbalance detection) built
+   here apply directly to any classifier deployed against shifting real-world data — fraud
+   detection, credit risk, churn, ad-click prediction, demand forecasting. The stock-market
+   domain is the example; the production-ML discipline is the transferable part.
+
+In its current state, this system is best framed as a **decision-support / research tool**
+(human reviews the signal, SHAP explanation, and backtest before acting) — not an autonomous
+trading system. That distinction matters and is stated here deliberately.
+
+## Known limitations (honest, not hidden)
+
+- RandomForest only — no LSTM/XGBoost ensemble yet (listed as roadmap, not claimed as shipped).
+- No real-time tick data — daily granularity (yfinance EOD).
+- Single-asset models — no cross-sectional/portfolio-level signal yet.
+- Backtest ignores Indian market-specific costs like STT and exchange transaction charges beyond a flat commission.
 
 ## Disclaimer
 
