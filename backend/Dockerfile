@@ -15,6 +15,6 @@ USER appuser
 
 EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health')" || exit 1
+    CMD python -c "import os,urllib.request; urllib.request.urlopen('http://localhost:' + os.environ.get('PORT','5000') + '/api/health')" || exit 1
 
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "run:app"]
+CMD gunicorn -w 1 -b 0.0.0.0:${PORT:-5000} run:app --timeout 120
